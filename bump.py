@@ -1,245 +1,499 @@
-"""
-基础概念
-抓牌行为: 从池中抓牌，每抓取一张，放入暂存区并则判断基础花色。若抓牌花色与指定花色一致，则继续抓牌。以下简称"抓取"或"抓牌"
-抽取池(区): 所有牌子来源
-暂存区: 临时存放抓牌的牌子
-碰子区: 存放匹配的碰子
-对对碰: 计算暂存区中的所有匹配的牌面花色，每匹配X对牌，则执行X次抓牌
+from typing import Dict, List, Tuple, Optional, Type
+from enum import auto
 
-基本规则
-1. 开局阶段: 随机选一个基础花色(条子、风色、筒子，万子), 以及从池中抓取若干张牌(一般初始10张牌)
-2. 流程阶段: 当抓取行为结束时才进行对对碰，直到抽取池清空或暂存区不再满足对对碰条件时，游戏结束；按照这个游戏规则下，如何调整来增加玩家的参与感和爽感？
-
-"""
-
-from typing import List, Dict, Optional
-
-import copy
+import time
 import enum
+import typing
 import random
 
-
-@enum.unique
-class BasicCardType(enum.Enum):
-    万子牌 = 0
-    条子牌 = 1 << 0
-    筒子牌 = 1 << 1
-    风牌 = 1 << 2
-    箭牌 = 1 << 3
+import sys
 
 
-def MarkCardType(basicTy: BasicCardType, offset) -> int:
-    return (basicTy.value << 4) + offset
+class Logger:
+    level = 2
+
+    def __init__(self, moduleName):
+        self.moduleName = moduleName
+
+    def Trace(self, text):
+        if self.level > 0:
+            return
+        print(f"[TRACE][{self.moduleName}]{text}", file=sys.stdout, flush=True)
+
+    def Debug(self, text):
+        if self.level > 1:
+            return
+        print(f"[DEBUG][{self.moduleName}]{text}", file=sys.stdout, flush=True)
+
+    def Info(self, text):
+        print(f"[INFO][{self.moduleName}]{text}", file=sys.stdout, flush=True)
+
+    def Warn(self, text):
+        print(f"[WARN][{self.moduleName}]{text}", file=sys.stdout, flush=True)
+
+    def Error(self, text):
+        print(f"[ERROR][{self.moduleName}]{text}", file=sys.stderr, flush=True)
 
 
-@enum.unique
-class CardType(enum.Enum):
-    一万 = MarkCardType(BasicCardType.万子牌, 0)
-    二万 = MarkCardType(BasicCardType.万子牌, 1)
-    三万 = MarkCardType(BasicCardType.万子牌, 2)
-    四万 = MarkCardType(BasicCardType.万子牌, 3)
-    五万 = MarkCardType(BasicCardType.万子牌, 4)
-    六万 = MarkCardType(BasicCardType.万子牌, 5)
-    七万 = MarkCardType(BasicCardType.万子牌, 6)
-    八万 = MarkCardType(BasicCardType.万子牌, 7)
-    九万 = MarkCardType(BasicCardType.万子牌, 8)
-
-    一条 = MarkCardType(BasicCardType.条子牌, 0)
-    二条 = MarkCardType(BasicCardType.条子牌, 1)
-    三条 = MarkCardType(BasicCardType.条子牌, 2)
-    四条 = MarkCardType(BasicCardType.条子牌, 3)
-    五条 = MarkCardType(BasicCardType.条子牌, 4)
-    六条 = MarkCardType(BasicCardType.条子牌, 5)
-    七条 = MarkCardType(BasicCardType.条子牌, 6)
-    八条 = MarkCardType(BasicCardType.条子牌, 7)
-    九条 = MarkCardType(BasicCardType.条子牌, 8)
-
-    一筒 = MarkCardType(BasicCardType.筒子牌, 0)
-    二筒 = MarkCardType(BasicCardType.筒子牌, 1)
-    三筒 = MarkCardType(BasicCardType.筒子牌, 2)
-    四筒 = MarkCardType(BasicCardType.筒子牌, 3)
-    五筒 = MarkCardType(BasicCardType.筒子牌, 4)
-    六筒 = MarkCardType(BasicCardType.筒子牌, 5)
-    七筒 = MarkCardType(BasicCardType.筒子牌, 6)
-    八筒 = MarkCardType(BasicCardType.筒子牌, 7)
-    九筒 = MarkCardType(BasicCardType.筒子牌, 8)
-
-    东风 = MarkCardType(BasicCardType.风牌, 0)
-    南风 = MarkCardType(BasicCardType.风牌, 1)
-    西风 = MarkCardType(BasicCardType.风牌, 2)
-    北风 = MarkCardType(BasicCardType.风牌, 3)
-
-    红中 = MarkCardType(BasicCardType.箭牌, 0)
-    白板 = MarkCardType(BasicCardType.箭牌, 1)
-    发财 = MarkCardType(BasicCardType.箭牌, 2)
+SysLog = Logger("ECS")
 
 
-MAHJONG_POOL = []
-for _cardTy in list(CardType):
-    for _ in range(4):
-        MAHJONG_POOL.append(_cardTy)
+# 组件
+class Component:
 
-
-class CardPool:
     def __init__(self):
-        self._pool = copy.copy(MAHJONG_POOL)
-        random.shuffle(self._pool)
-        self._offset = 0
+        self.entity = None
 
-    def Draw(self, n) -> List[CardType]:
-        if self.IsEmpty():
-            return []
-        lst = self._pool[self._offset:self._offset + n]
-        self._offset += n
-        return lst
+    def Start(self, entity):
+        self.entity = entity
 
-    def IsEmpty(self):
-        return self._offset >= len(self._pool)
-
-    def GetCount(self) -> int:
-        return len(self._pool) - self._offset
+    def Destroy(self):
+        self.entity = None
 
 
-class TempStoreArea:
-    def __init__(self):
-        self._cards: Dict[CardType, int] = {}
+# 单例组件
+class SingletonComponent(Component):
 
-    def Enter(self, cards: List[CardType]):
-        for cardTy in cards:
-            self._cards[cardTy] = self._cards.get(cardTy, 0) + 1
+    def __init__(self, compCls):
+        super(SingletonComponent, self).__init__()
+        self.linkTy = compCls
 
-    def ExtractCombos(self) -> List[CardType]:
-        lst = []
-        for cardTy, count in self._cards.items():
-            combo = count // 2
-            self._cards[cardTy] -= combo * 2
-            lst.extend([cardTy] * combo)
-        return lst
+    # 单例实体特殊处理, 常规写法无需考虑单例销毁
+    def Start(self, entity):
+        super(SingletonComponent, self).Start(entity)
+        self.entity.world.singletons[self.linkTy] = self.entity.GetComponent(self.linkTy)
 
-    def IsExistCombos(self) -> bool:
-        for cardTy, count in self._cards.items():
-            if count >= 2:
-                return True
-        return False
-
-    def GetCount(self) -> int:
-        count = 0
-        for cnt in self._cards.values():
-            count += cnt
-        return count
+    def Destroy(self):
+        self.entity.world.singletons.pop(self.linkTy)
+        super(SingletonComponent, self).Destroy()
 
 
-class ComboArea:
-    def __init__(self):
-        self._combos = {}
-        self._comboUID = 0
+# 实体
+class Entity:
+    def __init__(self, world):
+        self.world = world
+        self.eID = 0
+        self.components: Dict[Type[Component], Component] = {}
 
-    def NextUID(self):
-        self._comboUID += 1
-        return self._comboUID
+    def AddComponent(self, comp: Component):
+        comp.Start(self)
+        self.components[comp.__class__] = comp
 
-    def MarkCombo(self, cardType: CardType):
-        uid = self.NextUID()
-        print(f"ComboArea uid:{uid} card:{cardType.name}")
-        self._combos[uid] = cardType
+    def GetComponent(self, compCls: Type[Component]) -> typing.Union[None, Component, typing.Any]:
+        return self.components.get(compCls, None)
 
-    def GetComboCount(self) -> int:
-        return self._comboUID
+    def HasComponent(self, compCls: Type[Component]) -> bool:
+        return compCls in self.components
+
+    def RemoveComponent(self, compCls: Type[Component]):
+        if comp := self.components.pop(compCls, None):
+            comp.Destroy()
+
+    def Destroy(self):
+        for compTy in list(self.components.keys()):
+            self.RemoveComponent(compTy)
+        self.world = None
 
 
-class ReportManager:
-    def __init__(self):
+class System:
+    def __init__(self, world):
+        self.world = world
+
+    def Update(self):
         pass
-
-
-class Event:
-    def __init__(self):
-        self._listeners = []
-
-
-class PubSub:
-    def __init__(self):
-        self._events = {}
-
-    def Attach(self, ev, listener):
-        pass
-
-    def Detach(self, ev, listener):
-        pass
-
-    def Notify(self, ev, info):
-        pass
-
-
-class GameStatus(enum.Enum):
-    IDLE = 0
-    STARTED = 1
-    OVER = 2
 
 
 class World:
-    def __init__(self):
-        self._pool = CardPool()
-        self._comboArea = ComboArea()
-        self._tempStore = TempStoreArea()
-        self.key: Optional[CardType] = None
-        self.status = GameStatus.IDLE
-        self.pickCnt = 0
+    def __init__(self, name: str = "Default"):
+        self.name = name
+        self.entities: Dict[int, Entity] = {}
+        self._nextID = 0
+        self.singletons: Dict[Type[Component], Component] = {}
 
-    def OnGameStart(self):
-        cards = self._pool.Draw(20)
-        print(f"World.OnGameStart cards:{cards}")
-        self._tempStore.Enter(cards)
+    def Start(self):
+        pass
 
-    def Select(self, key: CardType):
-        print(f"World.Select key:{key}")
-        self.key = key
+    def Destroy(self):
+        for entity in list(self.entities.values()):
+            self.RemoveEntity(entity)
 
-    def DoBump(self):
-        combos = self._tempStore.ExtractCombos()
-        if not combos:
+    def _GenID(self) -> int:
+        self._nextID += 1
+        return self._nextID
+
+    def GetSingleton(self, compCls: Type[Component]) -> Optional[Component]:
+        return self.singletons.get(compCls, None)
+
+    def CreateSingleton(self, comp: Component):
+        if comp.__class__ in self.singletons:
             return
-        print(f"World.DoBump pick:{self.pickCnt} add:{len(combos)}")
-        self.pickCnt += len(combos)
-        for cardTy in combos:
-            self._comboArea.MarkCombo(cardTy)
+        entity = self.CreateEntity()
+        entity.AddComponent(comp)
+        entity.AddComponent(SingletonComponent(comp.__class__))
 
-    def Run(self):
-        assert self.key is not None
-        if self.status == GameStatus.IDLE:
-            self.OnGameStart()
-            self.status = GameStatus.STARTED
+    def CreateEntity(self):
+        entity = Entity(self)
+        self.AddEntity(entity)
+        return entity
 
-        while self.status != GameStatus.OVER:
-            while self.pickCnt > 0:
-                hits = self._pool.Draw(1)
-                if not hits:  # 抽完了
-                    break
-                cardTy = hits[0]
-                addPick = int((cardTy.value >> 4) == (self.key.value >> 4))
-                delPick = 1
-                newPick = self.pickCnt - delPick + addPick
-                print(f"Pick card:{cardTy.name} basic:{BasicCardType(cardTy.value >> 4).name} pick:{newPick} addpick:{addPick} delpick:{delPick}")
-                self._tempStore.Enter([cardTy])
-                self.pickCnt = newPick
+    def GetEntity(self, eID: int) -> Entity:
+        return self.entities.get(eID, None)
 
-            self.DoBump()
+    def AddEntity(self, entity: Entity):
+        entity.eID = self._GenID()
+        SysLog.Trace(f"World.AddEntity world:{self.name} eid:{entity.eID} comps:{list(entity.components.keys())}")
+        self.entities[entity.eID] = entity
 
-            # if self._tempStore.IsExistCombos():
-            #     continue
-            if self.pickCnt > 0 and not self._pool.IsEmpty():
+    def RemoveEntity(self, entity: Entity):
+        if entity.world is not self:
+            return
+        SysLog.Trace(f"World.RemoveEntity world:{self.name} eid:{entity.eID} comps:{list(entity.components.keys())}")
+        entity.Destroy()
+        del self.entities[entity.eID]
+
+    def RemoveEntityByID(self, eID: int):
+        entity = self.entities.get(eID, None)
+        if not entity:
+            return
+        self.RemoveEntity(entity)
+
+    def GetEntityWithComps(self, comps: List[Type[Component]]) -> List[Entity]:
+        lst = []
+        for entity in self.entities.values():
+            if all([entity.HasComponent(compCls) for compCls in comps]):
+                lst.append(entity)
+        return lst
+
+    def Update(self):
+        pass
+
+
+# region 游戏状态
+
+@enum.unique
+class GameState(enum.Enum):
+    INIT = auto()
+    FINISH = auto()
+
+
+class GameStateComponent(Component):
+
+    def __init__(self):
+        super(GameStateComponent, self).__init__()
+        # self.state = GameState.INIT
+        self.drawTimes = 10
+        self.cardTy = (SuitType.万子牌, 1)
+        self.score = 0
+
+
+# endregion
+
+# region 麻将牌
+
+
+@enum.unique
+class SuitType(enum.Enum):
+    条子牌 = auto()  # 条子
+    筒子牌 = auto()  # 筒子
+    万子牌 = auto()  # 万子
+    风牌 = auto()  # 风色
+    箭牌 = auto()  # 箭牌
+
+
+class CardComponent(Component):
+
+    def __init__(self, suit: SuitType, val):
+        super(CardComponent, self).__init__()
+        self.suit = suit  # 花色
+        self.val = val  # 牌号
+
+
+# endregion
+
+
+GameLog = Logger("MahjongBump")
+
+
+# region Util
+
+class CovertUtil:
+    bases = {
+        1: "一",
+        2: "二",
+        3: "三",
+        4: "四",
+        5: "五",
+        6: "六",
+        7: "七",
+        8: "八",
+        9: "九",
+    }
+
+    @classmethod
+    def An2Cn(cls, num: int) -> str:
+        return str(cls.bases.get(num, num))
+
+
+class MahjongUtil:
+    specialSuits = {SuitType.风牌: {1: "东风", 2: "南风", 3: "西风", 4: "北风"},
+                    SuitType.箭牌: {1: "红中", 2: "白板", 3: "发财"}}
+    basicSuitMaxVal = 9
+
+    @classmethod
+    def CardName(cls, suit: SuitType, val: int):
+        if suit == SuitType.万子牌:
+            return CovertUtil.An2Cn(val) + "万"
+        elif suit == SuitType.条子牌:
+            return CovertUtil.An2Cn(val) + "条"
+        elif suit == SuitType.筒子牌:
+            return CovertUtil.An2Cn(val) + "筒"
+        elif suit in cls.specialSuits and val in cls.specialSuits[suit]:
+            return cls.specialSuits[suit][val]
+        return ""
+
+    @classmethod
+    def GenerateCards(cls) -> List[Tuple[SuitType, int]]:
+        cards = []
+        for suitTy in list(SuitType):
+            if suitTy in cls.specialSuits:
+                for val in cls.specialSuits[suitTy].keys():
+                    cards.extend([(suitTy, val)] * 4)
+            else:
+                for i in range(9):
+                    cards.extend([(suitTy, i + 1)] * 4)
+        return cards
+
+    @classmethod
+    def RandomCard(cls):
+        suit = random.choice(list(SuitType))
+        if suit not in cls.specialSuits:
+            return suit, random.randint(1, cls.basicSuitMaxVal)
+        return suit, random.choice(list(cls.specialSuits[suit].keys()))
+
+
+# endregion
+
+
+"""
+
+1. 可碰牌和可抓牌: 在ECS来看只是牌实体的状态, 通过增删组件来解耦, 两个行为分别对应牌的可抓取和可碰牌
+
+
+体验ECS:
+1.ECS部分状态逻辑有关联，只能通过Util和System去整合了，整体上还是欠封装的
+2.System间协作解耦，可以通过事件，事件应该是一个Entity么? 如此，一次Notify就产生多个事件Entity投放到多个System
+事件监听的行为也是状态
+"""
+
+
+# region 播报系统
+
+class ReportMessageManagerComponent(Component):
+    def __init__(self):
+        super(ReportMessageManagerComponent, self).__init__()
+        self.uid = 0
+        self.queue = []
+
+
+class ReportMessageComponent(Component):
+    def __init__(self):
+        super(ReportMessageComponent, self).__init__()
+        self.text = ""
+
+
+class ReportSystem(System):
+    def __init__(self, world):
+        super(ReportSystem, self).__init__(world)
+
+    def Update(self):
+        reportMgr = self.world.GetSingleton(ReportMessageManagerComponent)
+        for msg in reportMgr.queue:
+            print(msg)
+
+
+class ReportUtil:
+
+    @classmethod
+    def GetReportUID(cls, reportMgr):
+        reportMgr.uid += 1
+        return reportMgr.uid
+
+    @classmethod
+    def PushReport(cls, reportMgr, action, content):
+        reportUID = cls.GetReportUID(reportMgr)
+        reportMgr.queue.append("[No.{reportUID}][{action}] {content}".format(reportUID=reportUID, action=action, content=content))
+
+    @classmethod
+    def PushDrawActionReport(cls, reportMgr, content):
+        cls.PushReport(reportMgr, "抓牌", content)
+
+    @classmethod
+    def PushBumpActionReport(cls, reportMgr, content):
+        cls.PushReport(reportMgr, "碰牌", content)
+
+    @classmethod
+    def PushScoreGainActionReport(cls, reportMgr, content):
+        cls.PushReport(reportMgr, "积分", content)
+
+
+# endregion
+
+
+# region 抓取系统
+
+class DrawableComponent(Component):
+    pass
+
+
+class DrawingSystem(System):
+    def __init__(self, world):
+        super(DrawingSystem, self).__init__(world)
+
+    def Update(self):
+        gameState = self.world.GetSingleton(GameStateComponent)
+        reportMgr = self.world.GetSingleton(ReportMessageManagerComponent)
+
+        if gameState.drawTimes <= 0:
+            GameLog.Info(f"MahjongBumpWorld.Update stopped not drawing times running:{False}")
+            self.world.running = False  # FIXME: 更优雅的设置退出?
+            return
+
+        cards = self.world.GetEntityWithComps([CardComponent, DrawableComponent])
+
+        if not cards:
+            GameLog.Info(f"MahjongBumpWorld.Update stopped not enough cards to draw running:{False}")
+            self.running = False
+            return
+
+        for entity in cards:
+            if gameState.drawTimes <= 0:
+                break
+            cardComp: CardComponent = entity.GetComponent(CardComponent)
+
+            ReportUtil.PushDrawActionReport(reportMgr, f"花色:{MahjongUtil.CardName(cardComp.suit, cardComp.val)} 剩余抽取次数:{gameState.drawTimes - 1} 放入暂存区")
+            gameState.drawTimes -= 1
+            entity.RemoveComponent(DrawableComponent)
+            entity.AddComponent(BumpableComponent())
+            if cardComp.suit == gameState.cardTy[0]:
+                ReportUtil.PushDrawActionReport(reportMgr, f"花色:{MahjongUtil.CardName(cardComp.suit, cardComp.val)} "
+                                                           f"与 *{MahjongUtil.CardName(gameState.cardTy[0], gameState.cardTy[1])} "
+                                                           f"同花色 抽取次数+1 剩余抽取次数:{gameState.drawTimes + 1}"
+                                                )
+                gameState.drawTimes += 1
+
+
+# endregion
+
+# region 碰牌系统
+
+
+class BumpableComponent(Component):
+    pass
+
+
+class BumpingSystem(System):
+    def __init__(self, world):
+        super(BumpingSystem, self).__init__(world)
+
+    def Update(self):
+        gameState = self.world.GetSingleton(GameStateComponent)
+        reportMgr = self.world.GetSingleton(ReportMessageManagerComponent)
+        delCards = set()
+
+        bumps = self.world.GetEntityWithComps([CardComponent, BumpableComponent])
+
+        for cardA in bumps:
+            if cardA.eID in delCards:
                 continue
-            print(f"World.Run status:{GameStatus.OVER}")
-            self.status = GameStatus.OVER
+            for cardB in bumps:
+                if cardB.eID in delCards:
+                    continue
+                if cardA.eID == cardB.eID:
+                    continue
 
-        # GameOver
+                cardAComp: CardComponent = cardA.GetComponent(CardComponent)
+                cardBComp: CardComponent = cardB.GetComponent(CardComponent)
 
-        print(f"World.Run Done key:{self.key} pick:{self.pickCnt} combos:{self._comboArea.GetComboCount()} temp:{self._tempStore.GetCount()} pool:{self._pool.GetCount()}")
+                if (cardAComp.suit, cardAComp.val) == (cardBComp.suit, cardBComp.val):
+                    delCards.add(cardA.eID)
+                    delCards.add(cardB.eID)
+                    ReportUtil.PushBumpActionReport(reportMgr, f"花色:{MahjongUtil.CardName(cardBComp.suit, cardBComp.val)} 抽取次数+1 "
+                                                               f"剩余抽取次数:{gameState.drawTimes + 1} 积分:{gameState.score + 1}")
+                    gameState.score += 1
+                    gameState.drawTimes += 1
+                    break
 
-# TODO: 改造为ECS验证一下
-if __name__ == '__main__':
-    w = World()
-    w.Select(random.choice(MAHJONG_POOL))
+        for eID in delCards:
+            self.world.RemoveEntityByID(eID)
 
-    # w.Select(CardType.一万)
-    w.Run()
+
+# endregion
+
+# region 加载系统
+
+class SetUpSystem(System):
+    INIT_DRAW_TIMES = 10  # 基础抽数
+
+    def __init__(self, world):
+        super(SetUpSystem, self).__init__(world)
+
+    def Init(self):
+        self.InitGameState()
+        self.InitReportSys()
+        self.InitCards()
+
+    def InitGameState(self):
+        gameState = GameStateComponent()
+        gameState.drawTimes = self.INIT_DRAW_TIMES
+        gameState.cardTy = MahjongUtil.RandomCard()
+        self.world.CreateSingleton(gameState)
+
+    def InitReportSys(self):
+        reportMgr = ReportMessageManagerComponent()
+        self.world.CreateSingleton(reportMgr)
+
+    def InitCards(self):
+        for suitTy, val in MahjongUtil.GenerateCards():
+            card = self.world.CreateEntity()
+            card.AddComponent(CardComponent(suitTy, val))
+            card.AddComponent(DrawableComponent())
+
+
+# endregion
+
+
+class MahjongBumpWorld(World):
+
+    def __init__(self, name):
+        super(MahjongBumpWorld, self).__init__(name)
+        self.setUpSystem = SetUpSystem(self)
+        self.drawSystem = DrawingSystem(self)
+        self.bumpSystem = BumpingSystem(self)
+        self.reportSystem = ReportSystem(self)
+        self.running = False
+
+    def Start(self):
+        self.setUpSystem.Init()
+        GameLog.Info(f"MahjongBumpWorld.Started running:{True}")
+        self.running = True
+
+    def Update(self):
+        GameLog.Debug("MahjongBumpWorld.Update tick")
+        # 抓牌
+        self.drawSystem.Update()
+        # 碰牌
+        self.bumpSystem.Update()
+        # 播报
+        self.reportSystem.Update()
+        time.sleep(0.02)
+
+
+# endregion
+
+gw = MahjongBumpWorld("MahjongBump")
+gw.Start()
+
+while gw.running:
+    gw.Update()
+
+gw.Destroy()
